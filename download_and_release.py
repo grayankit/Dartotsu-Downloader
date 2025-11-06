@@ -53,8 +53,8 @@ TARGET_PATTERNS = {
     'build.apk': ['Dartotsu_apks/*'],
     'build.windows': ['Dartotsu_windows.exe'],
     'build.linux': ['Dartotsu_linux.zip'],
-    'build.ios': ['Dartotsu - iOS - main.ipa'],
-    'build.macos': ['Dartotsu - macos - main.dmg']
+    'build.ios': ['Dartotsu-iOS-main.ipa'],
+    'build.macos': ['Dartotsu-macos-main.dmg']
 }
 
 def fetch_files(folder_id, include_folders=False):
@@ -175,9 +175,9 @@ def main():
         if os.getenv("BUILD_LINUX") == "success":
             patterns.append("Dartotsu_linux.zip")
         if os.getenv("BUILD_IOS") == "success":
-            patterns.append("Dartotsu - iOS - main.ipa")
+            patterns.append("Dartotsu-iOS-main.ipa")
         if os.getenv("BUILD_MACOS") == "success":
-            patterns.append("Dartotsu - macos - main.dmg")
+            patterns.append("Dartotsu-macos-main.dmg")
         
         if not patterns:
             print("No successful builds found. Nothing to download.")
