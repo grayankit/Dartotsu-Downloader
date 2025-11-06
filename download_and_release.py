@@ -53,8 +53,8 @@ TARGET_PATTERNS = {
     'build.apk': ['*.apk'],
     'build.windows': ['Dartotsu_windows.exe'],
     'build.linux': ['Dartotsu_linux.zip'],
-    'build.ios': ['Dartotsu - iOS - main.ipa'],
-    'build.macos': ['Dartotsu - macos - main.dmg'],
+    'build.ios': ['Dartotsu-iOS-main.ipa'],
+    'build.macos': ['Dartotsu-macos-main.dmg'],
     'build.none': []  # No files to download
 }
 
