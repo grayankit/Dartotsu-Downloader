@@ -37,11 +37,36 @@ GITHUB_REPO = os.getenv("GITHUB_REPOSITORY")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 COMMIT_SHA = os.getenv("COMMIT_SHA", "")  # Get commit SHA from environment
 RELEASE_NOTES = os.getenv("RELEASE_NOTES", "")  # Get release notes from environment
+BUILD_TARGET = os.getenv("BUILD_TARGET", "build.all")  # Get build target from environment
 
 FOLDER_IDS = [
     '1nWYex54zd58SVitJUCva91_4k1PPTdP3',
     '1S4QzdKz7ZofhiF5GAvjMdBvYK7YhndKM'
 ]
+
+# Build target to file patterns mapping
+TARGET_PATTERNS = {
+    'build': ['Dartotsu_windows.exe', 'Dartotsu_apks/*'],
+    'build.all': ['*'],
+    'build.apk': ['Dartotsu_apks/*'],
+    'build.windows': ['Dartotsu_windows.exe'],
+    'build.linux': ['Dartotsu_linux.zip'],
+    'build.ios': ['Dartotsu - iOS - main.ipa'],
+    'build.macos': ['Dartotsu - macos - main.dmg']
+}
+
+# Function to check if a file should be downloaded based on build target
+def should_download_file(file_name, patterns):
+    for pattern in patterns:
+        if pattern == '*':
+            return True
+        elif pattern.endswith('/*'):
+            folder_name = pattern[:-2]
+            if file_name.startswith(folder_name):
+                return True
+        elif pattern == file_name:
+            return True
+    return False
 
 # Function to fetch files in a folder
 def fetch_files(folder_id):
@@ -99,9 +124,9 @@ def create_github_release(repo, token, tag, files, release_notes=""):
             release_notes = unquote(release_notes)
         except:
             pass  # If decoding fails, use as-is
-        body = f"## Changes\n\n{release_notes}\n\n---\n\nAutomated release"
+        body = f"## Changes\n\n{release_notes}\n\n---\n\nAutomated release for {BUILD_TARGET}"
     else:
-        body = "Automated release"
+        body = f"Automated release for {BUILD_TARGET}"
     
     if check_response.status_code == 200:
         print(f"Release with tag '{tag}' already exists. Updating existing release.")
@@ -203,6 +228,11 @@ def commit_and_push():
 def main():
     downloaded_files = []
     existing_files_hashes = {}
+    
+    # Get patterns for the current build target
+    patterns = TARGET_PATTERNS.get(BUILD_TARGET, ['*'])
+    print(f"Processing build target: {BUILD_TARGET}")
+    print(f"File patterns: {patterns}")
 
     # Step 1: Download files from all folders
     for folder_id in FOLDER_IDS:
@@ -215,15 +245,20 @@ def main():
         for file in files:
             file_id = file['id']
             file_name = file['name']
-            print(f"Found file: {file_name}")
-            file_path = download_file(file_id, file_name)
-            if file_path:
-                file_hash = calculate_file_hash(file_path)
-                if file_name not in existing_files_hashes or existing_files_hashes[file_name] != file_hash:
-                    downloaded_files.append(file_path)
-                    existing_files_hashes[file_name] = file_hash
-                else:
-                    print(f"File {file_name} is unchanged. Skipping release and upload.")
+            
+            # Check if this file should be downloaded based on build target
+            if should_download_file(file_name, patterns):
+                print(f"Found file matching build target: {file_name}")
+                file_path = download_file(file_id, file_name)
+                if file_path:
+                    file_hash = calculate_file_hash(file_path)
+                    if file_name not in existing_files_hashes or existing_files_hashes[file_name] != file_hash:
+                        downloaded_files.append(file_path)
+                        existing_files_hashes[file_name] = file_hash
+                    else:
+                        print(f"File {file_name} is unchanged. Skipping release and upload.")
+            else:
+                print(f"Skipping file {file_name} (does not match build target {BUILD_TARGET})")
 
     # Step 2: If new/changed files were downloaded
     if downloaded_files:
