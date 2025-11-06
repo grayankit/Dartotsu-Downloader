@@ -1,10 +1,29 @@
 name: Download and Release Files
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: 'Commit SHA from Aayush repo'
+        required: true
+      commit_logs:
+        description: 'Commit logs for release notes'
+        required: false
+      build_android:
+        description: 'Android build status'
+        required: false
+      build_windows:
+        description: 'Windows build status'
+        required: false
+      build_linux:
+        description: 'Linux build status'
+        required: false
+      build_ios:
+        description: 'iOS build status'
+        required: false
+      build_macos:
+        description: 'macOS build status'
+        required: false
 
 jobs:
   download-and-release:
@@ -23,6 +42,46 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2 requests
+
+      - name: Determine build target
+        id: determine_target
+        run: |
+          BUILD_ANDROID="${{ github.event.inputs.build_android }}"
+          BUILD_WINDOWS="${{ github.event.inputs.build_windows }}"
+          BUILD_LINUX="${{ github.event.inputs.build_linux }}"
+          BUILD_IOS="${{ github.event.inputs.build_ios }}"
+          BUILD_MACOS="${{ github.event.inputs.build_macos }}"
+          
+          # Initialize target as empty
+          TARGET=""
+          
+          # Append targets for each successful build
+          if [ "$BUILD_ANDROID" = "success" ]; then
+            TARGET="$TARGET build.apk"
+          fi
+          if [ "$BUILD_WINDOWS" = "success" ]; then
+            TARGET="$TARGET build.windows"
+          fi
+          if [ "$BUILD_LINUX" = "success" ]; then
+            TARGET="$TARGET build.linux"
+          fi
+          if [ "$BUILD_IOS" = "success" ]; then
+            TARGET="$TARGET build.ios"
+          fi
+          if [ "$BUILD_MACOS" = "success" ]; then
+            TARGET="$TARGET build.macos"
+          fi
+          
+          # Trim leading space
+          TARGET=$(echo "$TARGET" | sed 's/^ *//')
+          
+          # If no builds succeeded, set to build.none
+          if [ -z "$TARGET" ]; then
+            TARGET="build.none"
+          fi
+          
+          echo "target=$TARGET" >> $GITHUB_OUTPUT
+
       - name: Run the download and release script
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -30,5 +89,9 @@ jobs:
           SERVICE_ACCOUNT_JSON: ${{ secrets.SERVICE_ACCOUNT_JSON }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          BUILD_TARGET: ${{ steps.determine_target.outputs.target }}
+          COMMIT_SHA: ${{ github.event.inputs.commit_sha }}
+          RELEASE_NOTES: ${{ github.event.inputs.commit_logs }}
+          GITHUB_BRANCH: ${{ github.ref_name }}  # Add this to pass the current branch name
         run: |
-          python download_and_release.py "$SERVICE_ACCOUNT_JSON"
+          python download_and_release.py "$SERVICE_ACCOUNT_JSON" "$BUILD_TARGET" "$COMMIT_SHA" "$RELEASE_NOTES"
