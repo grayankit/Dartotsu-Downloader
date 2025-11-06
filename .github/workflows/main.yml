@@ -52,25 +52,32 @@ jobs:
           BUILD_IOS="${{ github.event.inputs.build_ios }}"
           BUILD_MACOS="${{ github.event.inputs.build_macos }}"
           
-          # Determine build target based on successful jobs
+          # Initialize target as empty
           TARGET=""
-          if [ "$BUILD_ANDROID" = "success" ] && [ "$BUILD_WINDOWS" = "success" ]; then
-            TARGET="build"
-          elif [ "$BUILD_ANDROID" = "success" ]; then
-            TARGET="build.apk"
-          elif [ "$BUILD_WINDOWS" = "success" ]; then
-            TARGET="build.windows"
-          elif [ "$BUILD_LINUX" = "success" ]; then
-            TARGET="build.linux"
-          elif [ "$BUILD_IOS" = "success" ]; then
-            TARGET="build.ios"
-          elif [ "$BUILD_MACOS" = "success" ]; then
-            TARGET="build.macos"
-          else
-            # If multiple builds succeeded, use build.all
-            if [ "$BUILD_ANDROID" = "success" ] || [ "$BUILD_WINDOWS" = "success" ] || [ "$BUILD_LINUX" = "success" ] || [ "$BUILD_IOS" = "success" ] || [ "$BUILD_MACOS" = "success" ]; then
-              TARGET="build.all"
-            fi
+          
+          # Append targets for each successful build
+          if [ "$BUILD_ANDROID" = "success" ]; then
+            TARGET="$TARGET build.apk"
+          fi
+          if [ "$BUILD_WINDOWS" = "success" ]; then
+            TARGET="$TARGET build.windows"
+          fi
+          if [ "$BUILD_LINUX" = "success" ]; then
+            TARGET="$TARGET build.linux"
+          fi
+          if [ "$BUILD_IOS" = "success" ]; then
+            TARGET="$TARGET build.ios"
+          fi
+          if [ "$BUILD_MACOS" = "success" ]; then
+            TARGET="$TARGET build.macos"
+          fi
+          
+          # Trim leading space
+          TARGET=$(echo "$TARGET" | sed 's/^ *//')
+          
+          # If no builds succeeded, set to build.none
+          if [ -z "$TARGET" ]; then
+            TARGET="build.none"
           fi
           
           echo "target=$TARGET" >> $GITHUB_OUTPUT
@@ -85,10 +92,6 @@ jobs:
           BUILD_TARGET: ${{ steps.determine_target.outputs.target }}
           COMMIT_SHA: ${{ github.event.inputs.commit_sha }}
           RELEASE_NOTES: ${{ github.event.inputs.commit_logs }}
-          BUILD_ANDROID: ${{ github.event.inputs.build_android }}
-          BUILD_WINDOWS: ${{ github.event.inputs.build_windows }}
-          BUILD_LINUX: ${{ github.event.inputs.build_linux }}
-          BUILD_IOS: ${{ github.event.inputs.build_ios }}
-          BUILD_MACOS: ${{ github.event.inputs.build_macos }}
+          GITHUB_BRANCH: ${{ github.ref_name }}  # Add this to pass the current branch name
         run: |
           python download_and_release.py "$SERVICE_ACCOUNT_JSON" "$BUILD_TARGET" "$COMMIT_SHA" "$RELEASE_NOTES"
