@@ -11,18 +11,17 @@ from google.oauth2 import service_account
 from googleapiclient.errors import HttpError
 import re
 import subprocess
-import urllib.parse
 
 # Constants
 SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
-WAIT_TIME = 5  # Time in seconds to wait between uploads
+WAIT_TIME = 5  # Time in seconds to wait between uploads to avoid rate limits
 GITHUB_DOWNLOADS_PATH = os.path.join(os.getcwd(), "downloads")
 
-# Get service account JSON from command-line argument
+# ✅ Get service account JSON from command-line argument
 if len(sys.argv) < 2:
-    print("Usage: python download_and_release.py '<SERVICE_ACCOUNT_JSON>' [BUILD_TARGET] [COMMIT_SHA] [RELEASE_NOTES]")
+    print("Usage: python download_and_release.py '<SERVICE_ACCOUNT_JSON>'")
     sys.exit(1)
 
 try:
@@ -36,40 +35,21 @@ except Exception as e:
 # GitHub environment
 GITHUB_REPO = os.getenv("GITHUB_REPOSITORY")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-BUILD_TARGET = os.getenv("BUILD_TARGET", "build.all")
-COMMIT_SHA = os.getenv("COMMIT_SHA", "")
-RELEASE_NOTES = os.getenv("RELEASE_NOTES", "")
 
-# Folder IDs
 FOLDER_IDS = [
-    '1nWYex54zd58SVitJUCva91_4k1PPTdP3',  # Main folder
-    '1S4QzdKz7ZofhiF5GAvjMdBvYK7YhndKM'   # APKs folder
+    '1nWYex54zd58SVitJUCva91_4k1PPTdP3',
+    '1S4QzdKz7ZofhiF5GAvjMdBvYK7YhndKM'
 ]
 
-# Build target to file patterns mapping
-TARGET_PATTERNS = {
-    'build': ['Dartotsu_windows.exe', 'Dartotsu_apks/*'],
-    'build.all': ['*'],
-    'build.apk': ['Dartotsu_apks/*'],
-    'build.windows': ['Dartotsu_windows.exe'],
-    'build.linux': ['Dartotsu_linux.zip'],
-    'build.ios': ['Dartotsu-iOS-main.ipa'],
-    'build.macos': ['Dartotsu-macos-main.dmg']
-}
-
-def fetch_files(folder_id, include_folders=False):
-    query = f"'{folder_id}' in parents"
-    if include_folders:
-        query += " and (mimeType = 'application/vnd.google-apps.folder' or mimeType != 'application/vnd.google-apps.folder')"
-    else:
-        query += " and mimeType != 'application/vnd.google-apps.folder'"
-    
+# Function to fetch files in a folder
+def fetch_files(folder_id):
     results = drive_service.files().list(
-        q=query,
-        fields="files(id, name, mimeType)"
+        q=f"'{folder_id}' in parents",
+        fields="files(id, name)"
     ).execute()
     return results.get('files', [])
 
+# Function to calculate file hash (MD5)
 def calculate_file_hash(file_path):
     hash_md5 = hashlib.md5()
     with open(file_path, "rb") as f:
@@ -77,12 +57,15 @@ def calculate_file_hash(file_path):
             hash_md5.update(chunk)
     return hash_md5.hexdigest()
 
+# Function to download a file from Google Drive (overwrites existing files)
 def download_file(file_id, file_name):
     try:
         request = drive_service.files().get_media(fileId=file_id)
         file_path = os.path.join(GITHUB_DOWNLOADS_PATH, file_name)
-        os.makedirs(GITHUB_DOWNLOADS_PATH, exist_ok=True)
-
+        
+        # Create the directory structure if it doesn't exist
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        
         with io.FileIO(file_path, "wb") as fh:
             downloader = MediaIoBaseDownload(fh, request)
             done = False
@@ -97,19 +80,13 @@ def download_file(file_id, file_name):
         else:
             raise
 
-def create_github_release(repo, token, tag, files, release_notes=""):
+# Function to create a GitHub release and upload files
+def create_github_release(repo, token, tag, files):
     release_url = f"https://api.github.com/repos/{repo}/releases"
     headers = {"Authorization": f"token {token}"}
 
-    # Format release notes
-    if release_notes:
-        # URL decode the release notes
-        release_notes = urllib.parse.unquote(release_notes)
-        body = f"## Changes\n\n{release_notes}\n\n---\n\nAutomated release for {BUILD_TARGET}"
-    else:
-        body = f"Automated release for {BUILD_TARGET}"
-
-    release_data = {"tag_name": tag, "name": tag, "body": body}
+    # Create a new release
+    release_data = {"tag_name": tag, "name": tag, "body": "Automated release with uploaded files"}
     release_response = requests.post(release_url, json=release_data, headers=headers)
     if release_response.status_code != 201:
         raise Exception(f"Failed to create release: {release_response.content}")
@@ -117,8 +94,9 @@ def create_github_release(repo, token, tag, files, release_notes=""):
     release = release_response.json()
     upload_url = release["upload_url"].split("{")[0]
 
+    # Upload files to the release
     for file_path in files:
-        if file_path:
+        if file_path:  # Skip if file_path is None
             file_name = os.path.basename(file_path)
             with open(file_path, "rb") as f:
                 headers.update({"Content-Type": "application/octet-stream"})
@@ -130,11 +108,40 @@ def create_github_release(repo, token, tag, files, release_notes=""):
             print(f"Uploaded {file_name} to GitHub release.")
     print(f"Release {tag} created successfully.")
 
+# # Function to upload file to Telegram
+# def upload_to_telegram(file_path, file_name):
+#     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
+#     file_size = os.path.getsize(file_path)
+
+#     if file_size > 50 * 1024 * 1024:
+#         print(f"File too large for Telegram: {file_name} ({file_size / (1024 * 1024):.2f} MB)")
+#         return
+
+#     with open(file_path, 'rb') as file:
+#         response = requests.post(url, data={'chat_id': TELEGRAM_CHAT_ID}, files={'document': file})
+#         if response.status_code == 200:
+#             print(f"Successfully uploaded {file_name} to Telegram.")
+#         else:
+#             print(f"Failed to upload {file_name} to Telegram: {response.json()}")
+
+
+def get_external_commit_hash(repo):
+    url = f"https://api.github.com/repos/{repo}/commits"
+    response = requests.get(url)
+
+    if response.status_code == 200:
+        commit_sha = response.json()[0].get('sha')
+        return commit_sha[:7] if commit_sha else "0000000"
+    else:
+        print(f"Failed to fetch commits from {repo}: {response.text}")
+        return "00000"
+# Function to configure git user identity
 def configure_git_identity():
-    subprocess.run(['git', 'config', '--global', 'user.name', 'Sheby'], check=True)
-    subprocess.run(['git', 'config', '--global', 'user.email', 'sheby@gmail.com'], check=True)
+    subprocess.run(['git', 'config', '--global', 'user.name', 'Sheby'], check=True)  # Replace with your name
+    subprocess.run(['git', 'config', '--global', 'user.email', 'sheby@gmail.com'], check=True)  # Replace with your email
     print("Configured Git identity.")
 
+# Function to commit and push changes to GitHub
 def commit_and_push():
     try:
         subprocess.run(['git', 'add', '.'], check=True)
@@ -142,110 +149,63 @@ def commit_and_push():
         if result.returncode == 0:
             print("No changes to commit.")
             return
-        subprocess.run(['git', 'commit', '-m', f'Add downloaded files for {BUILD_TARGET}'], check=True)
+        subprocess.run(['git', 'commit', '-m', 'Add downloaded files'], check=True)
         subprocess.run(['git', 'push', 'origin', 'main'], check=True)
         print("Committed and pushed files to GitHub.")
     except subprocess.CalledProcessError as e:
         print(f"Error during git operations: {e}")
 
-def should_download_file(file_name, patterns):
-    for pattern in patterns:
-        if pattern == '*':
-            return True
-        elif pattern.endswith('/*'):
-            folder_name = pattern[:-2]
-            if file_name.startswith(folder_name):
-                return True
-        elif pattern == file_name:
-            return True
-    return False
-
+# Main script logic
 def main():
     downloaded_files = []
     existing_files_hashes = {}
-    
-    # Determine patterns based on BUILD_TARGET or job statuses
-    if BUILD_TARGET == "build.all":
-        # Check individual job statuses to only download successful builds
-        patterns = []
-        if os.getenv("BUILD_ANDROID") == "success":
-            patterns.append("Dartotsu_apks/*")
-        if os.getenv("BUILD_WINDOWS") == "success":
-            patterns.append("Dartotsu_windows.exe")
-        if os.getenv("BUILD_LINUX") == "success":
-            patterns.append("Dartotsu_linux.zip")
-        if os.getenv("BUILD_IOS") == "success":
-            patterns.append("Dartotsu-iOS-main.ipa")
-        if os.getenv("BUILD_MACOS") == "success":
-            patterns.append("Dartotsu-macos-main.dmg")
-        
-        if not patterns:
-            print("No successful builds found. Nothing to download.")
-            return
-    else:
-        patterns = TARGET_PATTERNS.get(BUILD_TARGET, ['*'])
-    
-    print(f"Processing build target: {BUILD_TARGET}")
-    print(f"File patterns: {patterns}")
 
-    # Download files from all folders
+    # Step 1: Download files from all folders
     for folder_id in FOLDER_IDS:
         print(f"Fetching files from folder ID: {folder_id}")
-        items = fetch_files(folder_id, include_folders=True)
-        
-        for item in items:
-            if item['mimeType'] == 'application/vnd.google-apps.folder':
-                # Process subfolder
-                subfolder_files = fetch_files(item['id'], include_folders=False)
-                for file in subfolder_files:
-                    file_name = f"{item['name']}/{file['name']}"
-                    if should_download_file(file_name, patterns):
-                        print(f"Found file in subfolder: {file_name}")
-                        file_path = download_file(file['id'], file_name)
-                        if file_path:
-                            file_hash = calculate_file_hash(file_path)
-                            if file_name not in existing_files_hashes or existing_files_hashes[file_name] != file_hash:
-                                downloaded_files.append(file_path)
-                                existing_files_hashes[file_name] = file_hash
-                            else:
-                                print(f"File {file_name} is unchanged. Skipping.")
-            else:
-                # Process top-level file
-                if should_download_file(item['name'], patterns):
-                    print(f"Found top-level file: {item['name']}")
-                    file_path = download_file(item['id'], item['name'])
-                    if file_path:
-                        file_hash = calculate_file_hash(file_path)
-                        if item['name'] not in existing_files_hashes or existing_files_hashes[item['name']] != file_hash:
-                            downloaded_files.append(file_path)
-                            existing_files_hashes[item['name']] = file_hash
-                        else:
-                            print(f"File {item['name']} is unchanged. Skipping.")
+        files = fetch_files(folder_id)
+        if not files:
+            print(f"No files found in folder ID: {folder_id}")
+            continue
 
-    # If new/changed files were downloaded
+        for file in files:
+            file_id = file['id']
+            file_name = file['name']
+            print(f"Found file: {file_name}")
+            file_path = download_file(file_id, file_name)
+            if file_path:
+                file_hash = calculate_file_hash(file_path)
+                if file_name not in existing_files_hashes or existing_files_hashes[file_name] != file_hash:
+                    downloaded_files.append(file_path)
+                    existing_files_hashes[file_name] = file_hash
+                else:
+                    print(f"File {file_name} is unchanged. Skipping release and upload.")
+
+    # Step 2: If new/changed files were downloaded
     if downloaded_files:
         configure_git_identity()
         commit_and_push()
 
-        # Use commit SHA from triggering workflow if available
-        tag_name = COMMIT_SHA[:7] if COMMIT_SHA else "latest"
-        print(f"Using tag: {tag_name}")
+        # Generate tag from external repo commit hash
+        EXTERNAL_REPO = "aayush2622/Dartotsu"
+        tag_name = get_external_commit_hash(EXTERNAL_REPO)
+        print(f"Using tag based on external commit hash: {tag_name}")
 
-        # Check for existing release
+        # ✅ Avoid duplicate release
         release_check_url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/tags/{tag_name}"
-        headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+        headers = {"Authorization": f"token ${GITHUB_TOKEN}"}
         check_response = requests.get(release_check_url, headers=headers)
 
         if check_response.status_code == 200:
             print(f"Release with tag '{tag_name}' already exists. Skipping release creation.")
         else:
-            create_github_release(GITHUB_REPO, GITHUB_TOKEN, tag_name, downloaded_files, RELEASE_NOTES)
+            create_github_release(GITHUB_REPO, GITHUB_TOKEN, tag_name, downloaded_files)
 
-        # Upload to Telegram (commented out as in original)
-        # for file_path in downloaded_files:
-        #     file_name = os.path.basename(file_path)
-        #     upload_to_telegram(file_path, file_name)
-        #     time.sleep(WAIT_TIME)
+        # Upload to Telegram
+        for file_path in downloaded_files:
+            file_name = os.path.basename(file_path)
+            # upload_to_telegram(file_path, file_name)
+            time.sleep(WAIT_TIME)
     else:
         print("No new or changed files to commit, release, or upload.")
 
