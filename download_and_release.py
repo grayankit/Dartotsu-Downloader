@@ -5,11 +5,11 @@ import hashlib
 import requests
 import json
 import sys
+import fnmatch  # Added for pattern matching
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from google.oauth2 import service_account
 from googleapiclient.errors import HttpError
-import re
 import subprocess
 
 # Constants
@@ -46,25 +46,19 @@ FOLDER_IDS = [
 
 # Build target to file patterns mapping
 TARGET_PATTERNS = {
-    'build': ['Dartotsu_windows.exe', 'Dartotsu_apks/*'],
+    'build': ['Dartotsu_windows.exe', '*.apk'],
     'build.all': ['*'],
-    'build.apk': ['Dartotsu_apks/*'],
+    'build.apk': ['*.apk'],
     'build.windows': ['Dartotsu_windows.exe'],
     'build.linux': ['Dartotsu_linux.zip'],
-    'build.ios': ['Dartotsu - iOS - main.ipa'],
-    'build.macos': ['Dartotsu - macos - main.dmg']
+    'build.ios': ['Dartotsu-iOS-main.ipa'],
+    'build.macos': ['Dartotsu-macos-main.dmg']
 }
 
 # Function to check if a file should be downloaded based on build target
 def should_download_file(file_name, patterns):
     for pattern in patterns:
-        if pattern == '*':
-            return True
-        elif pattern.endswith('/*'):
-            folder_name = pattern[:-2]
-            if file_name.startswith(folder_name):
-                return True
-        elif pattern == file_name:
+        if fnmatch.fnmatch(file_name, pattern):
             return True
     return False
 
@@ -72,7 +66,7 @@ def should_download_file(file_name, patterns):
 def fetch_files(folder_id):
     results = drive_service.files().list(
         q=f"'{folder_id}' in parents",
-        fields="files(id, name)"
+        fields="files(id, name, mimeType)"  # Added mimeType to identify folders
     ).execute()
     return results.get('files', [])
 
@@ -85,7 +79,12 @@ def calculate_file_hash(file_path):
     return hash_md5.hexdigest()
 
 # Function to download a file from Google Drive (overwrites existing files)
-def download_file(file_id, file_name):
+def download_file(file_id, file_name, mime_type):
+    # Skip folders
+    if mime_type == 'application/vnd.google-apps.folder':
+        print(f"Skipping folder: {file_name}")
+        return None
+        
     try:
         request = drive_service.files().get_media(fileId=file_id)
         file_path = os.path.join(GITHUB_DOWNLOADS_PATH, file_name)
@@ -177,23 +176,6 @@ def create_github_release(repo, token, tag, files, release_notes=""):
             print(f"Uploaded {file_name} to GitHub release.")
     print(f"Release {tag} created/updated successfully.")
 
-# # Function to upload file to Telegram
-# def upload_to_telegram(file_path, file_name):
-#     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument"
-#     file_size = os.path.getsize(file_path)
-
-#     if file_size > 50 * 1024 * 1024:
-#         print(f"File too large for Telegram: {file_name} ({file_size / (1024 * 1024):.2f} MB)")
-#         return
-
-#     with open(file_path, 'rb') as file:
-#         response = requests.post(url, data={'chat_id': TELEGRAM_CHAT_ID}, files={'document': file})
-#         if response.status_code == 200:
-#             print(f"Successfully uploaded {file_name} to Telegram.")
-#         else:
-#             print(f"Failed to upload {file_name} to Telegram: {response.json()}")
-
-
 def get_external_commit_hash(repo):
     url = f"https://api.github.com/repos/{repo}/commits"
     response = requests.get(url)
@@ -204,10 +186,11 @@ def get_external_commit_hash(repo):
     else:
         print(f"Failed to fetch commits from {repo}: {response.text}")
         return "00000"
+
 # Function to configure git user identity
 def configure_git_identity():
-    subprocess.run(['git', 'config', '--global', 'user.name', 'Sheby'], check=True)  # Replace with your name
-    subprocess.run(['git', 'config', '--global', 'user.email', 'sheby@gmail.com'], check=True)  # Replace with your email
+    subprocess.run(['git', 'config', '--global', 'user.name', 'Sheby'], check=True)
+    subprocess.run(['git', 'config', '--global', 'user.email', 'sheby@gmail.com'], check=True)
     print("Configured Git identity.")
 
 # Function to commit and push changes to GitHub
@@ -245,11 +228,12 @@ def main():
         for file in files:
             file_id = file['id']
             file_name = file['name']
+            mime_type = file.get('mimeType', '')  # Get MIME type to identify folders
             
             # Check if this file should be downloaded based on build target
             if should_download_file(file_name, patterns):
                 print(f"Found file matching build target: {file_name}")
-                file_path = download_file(file_id, file_name)
+                file_path = download_file(file_id, file_name, mime_type)
                 if file_path:
                     file_hash = calculate_file_hash(file_path)
                     if file_name not in existing_files_hashes or existing_files_hashes[file_name] != file_hash:
