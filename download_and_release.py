@@ -208,7 +208,7 @@ def commit_and_push(files_to_commit):
             return
         
         subprocess.run(['git', 'commit', '-m', f'Add downloaded files for {BUILD_TARGET}'], check=True)
-        subprocess.run(['git', 'push', 'origin', 'main'], check=True)
+        subprocess.run(['git', 'push', 'origin', 'test'], check=True)
         print("Committed and pushed files to GitHub.")
     except subprocess.CalledProcessError as e:
         print(f"Error during git operations: {e}")
