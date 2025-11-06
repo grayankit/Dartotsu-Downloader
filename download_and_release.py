@@ -5,7 +5,8 @@ import hashlib
 import requests
 import json
 import sys
-import fnmatch  # Added for pattern matching
+import fnmatch
+import shutil
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from google.oauth2 import service_account
@@ -51,8 +52,8 @@ TARGET_PATTERNS = {
     'build.apk': ['*.apk'],
     'build.windows': ['Dartotsu_windows.exe'],
     'build.linux': ['Dartotsu_linux.zip'],
-    'build.ios': ['Dartotsu-iOS-main.ipa'],
-    'build.macos': ['Dartotsu-macos-main.dmg']
+    'build.ios': ['Dartotsu - iOS - main.ipa'],
+    'build.macos': ['Dartotsu - macos - main.dmg']
 }
 
 # Function to check if a file should be downloaded based on build target
@@ -66,7 +67,7 @@ def should_download_file(file_name, patterns):
 def fetch_files(folder_id):
     results = drive_service.files().list(
         q=f"'{folder_id}' in parents",
-        fields="files(id, name, mimeType)"  # Added mimeType to identify folders
+        fields="files(id, name, mimeType)"
     ).execute()
     return results.get('files', [])
 
@@ -117,12 +118,11 @@ def create_github_release(repo, token, tag, files, release_notes=""):
     
     # Format release notes
     if release_notes:
-        # URL decode the release notes
         try:
             from urllib.parse import unquote
             release_notes = unquote(release_notes)
         except:
-            pass  # If decoding fails, use as-is
+            pass
         body = f"## Changes\n\n{release_notes}\n\n---\n\nAutomated release for {BUILD_TARGET}"
     else:
         body = f"Automated release for {BUILD_TARGET}"
@@ -193,19 +193,54 @@ def configure_git_identity():
     subprocess.run(['git', 'config', '--global', 'user.email', 'sheby@gmail.com'], check=True)
     print("Configured Git identity.")
 
-# Function to commit and push changes to GitHub
-def commit_and_push():
+# Function to commit and push only the specified files
+def commit_and_push(files_to_commit):
     try:
-        subprocess.run(['git', 'add', '.'], check=True)
+        # Add only the files we want to commit
+        for file_path in files_to_commit:
+            if file_path:  # Skip if file_path is None
+                subprocess.run(['git', 'add', file_path], check=True)
+        
+        # Check if there are any changes to commit
         result = subprocess.run(['git', 'diff', '--cached', '--quiet'])
         if result.returncode == 0:
             print("No changes to commit.")
             return
-        subprocess.run(['git', 'commit', '-m', 'Add downloaded files'], check=True)
+        
+        subprocess.run(['git', 'commit', '-m', f'Add downloaded files for {BUILD_TARGET}'], check=True)
         subprocess.run(['git', 'push', 'origin', 'main'], check=True)
         print("Committed and pushed files to GitHub.")
     except subprocess.CalledProcessError as e:
         print(f"Error during git operations: {e}")
+
+# Function to clean up old files not in the current release
+def cleanup_old_files(current_files):
+    try:
+        # Get all files in the downloads directory
+        existing_files = []
+        for root, _, files in os.walk(GITHUB_DOWNLOADS_PATH):
+            for file in files:
+                existing_files.append(os.path.join(root, file))
+        
+        # Determine which files to keep (those in current_files)
+        files_to_keep = set(current_files)
+        
+        # Delete files that aren't in the current release
+        for file_path in existing_files:
+            if file_path not in files_to_keep:
+                print(f"Removing old file: {file_path}")
+                os.remove(file_path)
+                
+        # Remove empty directories
+        for root, dirs, _ in os.walk(GITHUB_DOWNLOADS_PATH, topdown=False):
+            for dir in dirs:
+                dir_path = os.path.join(root, dir)
+                if not os.listdir(dir_path):
+                    print(f"Removing empty directory: {dir_path}")
+                    os.rmdir(dir_path)
+                    
+    except Exception as e:
+        print(f"Error during cleanup: {e}")
 
 # Main script logic
 def main():
@@ -228,7 +263,7 @@ def main():
         for file in files:
             file_id = file['id']
             file_name = file['name']
-            mime_type = file.get('mimeType', '')  # Get MIME type to identify folders
+            mime_type = file.get('mimeType', '')
             
             # Check if this file should be downloaded based on build target
             if should_download_file(file_name, patterns):
@@ -246,15 +281,17 @@ def main():
 
     # Step 2: If new/changed files were downloaded
     if downloaded_files:
+        # Clean up old files not in the current release
+        cleanup_old_files(downloaded_files)
+        
         configure_git_identity()
-        commit_and_push()
+        commit_and_push(downloaded_files)
 
         # Use the passed commit SHA if available, otherwise fall back to fetching it
         if COMMIT_SHA:
-            tag_name = COMMIT_SHA[:7]  # Use first 7 characters of the passed SHA
+            tag_name = COMMIT_SHA[:7]
             print(f"Using passed commit SHA: {tag_name}")
         else:
-            # Fallback to fetching from external repo
             EXTERNAL_REPO = "aayush2622/Dartotsu"
             tag_name = get_external_commit_hash(EXTERNAL_REPO)
             print(f"Using tag based on external commit hash: {tag_name}")
