@@ -35,6 +35,8 @@ except Exception as e:
 # GitHub environment
 GITHUB_REPO = os.getenv("GITHUB_REPOSITORY")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+COMMIT_SHA = os.getenv("COMMIT_SHA", "")  # Get commit SHA from environment
+RELEASE_NOTES = os.getenv("RELEASE_NOTES", "")  # Get release notes from environment
 
 FOLDER_IDS = [
     '1nWYex54zd58SVitJUCva91_4k1PPTdP3',
@@ -81,17 +83,59 @@ def download_file(file_id, file_name):
             raise
 
 # Function to create a GitHub release and upload files
-def create_github_release(repo, token, tag, files):
+def create_github_release(repo, token, tag, files, release_notes=""):
     release_url = f"https://api.github.com/repos/{repo}/releases"
     headers = {"Authorization": f"token {token}"}
 
-    # Create a new release
-    release_data = {"tag_name": tag, "name": tag, "body": "Automated release with uploaded files"}
-    release_response = requests.post(release_url, json=release_data, headers=headers)
-    if release_response.status_code != 201:
-        raise Exception(f"Failed to create release: {release_response.content}")
+    # First check if release already exists
+    check_url = f"https://api.github.com/repos/{repo}/releases/tags/{tag}"
+    check_response = requests.get(check_url, headers=headers)
+    
+    # Format release notes
+    if release_notes:
+        # URL decode the release notes
+        try:
+            from urllib.parse import unquote
+            release_notes = unquote(release_notes)
+        except:
+            pass  # If decoding fails, use as-is
+        body = f"## Changes\n\n{release_notes}\n\n---\n\nAutomated release"
+    else:
+        body = "Automated release"
+    
+    if check_response.status_code == 200:
+        print(f"Release with tag '{tag}' already exists. Updating existing release.")
+        release = check_response.json()
+        release_id = release['id']
+        
+        # Delete existing assets
+        assets_url = f"https://api.github.com/repos/{repo}/releases/{release_id}/assets"
+        assets_response = requests.get(assets_url, headers=headers)
+        if assets_response.status_code == 200:
+            assets = assets_response.json()
+            for asset in assets:
+                asset_id = asset['id']
+                delete_url = f"https://api.github.com/repos/{repo}/releases/assets/{asset_id}"
+                delete_response = requests.delete(delete_url, headers=headers)
+                if delete_response.status_code != 204:
+                    print(f"Warning: Failed to delete asset {asset['name']}: {delete_response.status_code}")
+        
+        # Update the release
+        update_url = f"https://api.github.com/repos/{repo}/releases/{release_id}"
+        update_data = {"tag_name": tag, "name": tag, "body": body}
+        update_response = requests.patch(update_url, json=update_data, headers=headers)
+        if update_response.status_code != 200:
+            raise Exception(f"Failed to update release: {update_response.content}")
+        
+        release = update_response.json()
+    else:
+        # Create a new release
+        release_data = {"tag_name": tag, "name": tag, "body": body}
+        release_response = requests.post(release_url, json=release_data, headers=headers)
+        if release_response.status_code != 201:
+            raise Exception(f"Failed to create release: {release_response.content}")
+        release = release_response.json()
 
-    release = release_response.json()
     upload_url = release["upload_url"].split("{")[0]
 
     # Upload files to the release
@@ -106,7 +150,7 @@ def create_github_release(repo, token, tag, files):
                 if upload_response.status_code not in (200, 201):
                     raise Exception(f"Failed to upload file {file_name}: {upload_response.content}")
             print(f"Uploaded {file_name} to GitHub release.")
-    print(f"Release {tag} created successfully.")
+    print(f"Release {tag} created/updated successfully.")
 
 # # Function to upload file to Telegram
 # def upload_to_telegram(file_path, file_name):
@@ -186,20 +230,18 @@ def main():
         configure_git_identity()
         commit_and_push()
 
-        # Generate tag from external repo commit hash
-        EXTERNAL_REPO = "aayush2622/Dartotsu"
-        tag_name = get_external_commit_hash(EXTERNAL_REPO)
-        print(f"Using tag based on external commit hash: {tag_name}")
-
-        # ✅ Avoid duplicate release
-        release_check_url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/tags/{tag_name}"
-        headers = {"Authorization": f"token ${GITHUB_TOKEN}"}
-        check_response = requests.get(release_check_url, headers=headers)
-
-        if check_response.status_code == 200:
-            print(f"Release with tag '{tag_name}' already exists. Skipping release creation.")
+        # Use the passed commit SHA if available, otherwise fall back to fetching it
+        if COMMIT_SHA:
+            tag_name = COMMIT_SHA[:7]  # Use first 7 characters of the passed SHA
+            print(f"Using passed commit SHA: {tag_name}")
         else:
-            create_github_release(GITHUB_REPO, GITHUB_TOKEN, tag_name, downloaded_files)
+            # Fallback to fetching from external repo
+            EXTERNAL_REPO = "aayush2622/Dartotsu"
+            tag_name = get_external_commit_hash(EXTERNAL_REPO)
+            print(f"Using tag based on external commit hash: {tag_name}")
+
+        # Create or update release with release notes
+        create_github_release(GITHUB_REPO, GITHUB_TOKEN, tag_name, downloaded_files, RELEASE_NOTES)
 
         # Upload to Telegram
         for file_path in downloaded_files:
