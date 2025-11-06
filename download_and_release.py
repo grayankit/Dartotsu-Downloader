@@ -19,6 +19,7 @@ TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 WAIT_TIME = 5  # Time in seconds to wait between uploads to avoid rate limits
 GITHUB_DOWNLOADS_PATH = os.path.join(os.getcwd(), "downloads")
+GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main")  # Make branch name configurable
 
 # ✅ Get service account JSON from command-line argument
 if len(sys.argv) < 2:
@@ -53,7 +54,8 @@ TARGET_PATTERNS = {
     'build.windows': ['Dartotsu_windows.exe'],
     'build.linux': ['Dartotsu_linux.zip'],
     'build.ios': ['Dartotsu - iOS - main.ipa'],
-    'build.macos': ['Dartotsu - macos - main.dmg']
+    'build.macos': ['Dartotsu - macos - main.dmg'],
+    'build.none': []  # No files to download
 }
 
 # Function to check if a file should be downloaded based on build target
@@ -208,10 +210,39 @@ def commit_and_push(files_to_commit):
             return
         
         subprocess.run(['git', 'commit', '-m', f'Add downloaded files for {BUILD_TARGET}'], check=True)
-        subprocess.run(['git', 'push', 'origin', 'test'], check=True)
-        print("Committed and pushed files to GitHub.")
+        
+        # Check if the branch exists on remote
+        try:
+            # First try to push with upstream set
+            subprocess.run(['git', 'push', '-u', 'origin', GITHUB_BRANCH], check=True)
+            print(f"Pushed to {GITHUB_BRANCH} branch with upstream set.")
+        except subprocess.CalledProcessError:
+            try:
+                # If that fails, try a regular push
+                subprocess.run(['git', 'push', 'origin', GITHUB_BRANCH], check=True)
+                print(f"Pushed to {GITHUB_BRANCH} branch.")
+            except subprocess.CalledProcessError as e:
+                print(f"Error during git push: {e}")
+                print(f"Trying to determine the correct branch name...")
+                
+                # Get the current branch name
+                result = subprocess.run(['git', 'branch', '--show-current'], 
+                                      capture_output=True, text=True)
+                current_branch = result.stdout.strip()
+                if current_branch:
+                    print(f"Current branch is: {current_branch}")
+                    try:
+                        subprocess.run(['git', 'push', 'origin', current_branch], check=True)
+                        print(f"Successfully pushed to {current_branch} branch.")
+                    except subprocess.CalledProcessError as e2:
+                        print(f"Failed to push to {current_branch}: {e2}")
+                        raise
+                else:
+                    raise
+                
     except subprocess.CalledProcessError as e:
         print(f"Error during git operations: {e}")
+        # Continue with release creation even if git push fails
 
 # Function to clean up old files not in the current release
 def cleanup_old_files(current_files):
@@ -247,10 +278,20 @@ def main():
     downloaded_files = []
     existing_files_hashes = {}
     
-    # Get patterns for the current build target
-    patterns = TARGET_PATTERNS.get(BUILD_TARGET, ['*'])
-    print(f"Processing build target: {BUILD_TARGET}")
-    print(f"File patterns: {patterns}")
+    # Split BUILD_TARGET into individual targets
+    targets = BUILD_TARGET.split()
+    print(f"Processing build targets: {targets}")
+    
+    # Get patterns for all targets
+    all_patterns = []
+    for target in targets:
+        patterns = TARGET_PATTERNS.get(target, [])
+        all_patterns.extend(patterns)
+        print(f"Patterns for {target}: {patterns}")
+    
+    # Remove duplicates
+    all_patterns = list(set(all_patterns))
+    print(f"Combined patterns: {all_patterns}")
 
     # Step 1: Download files from all folders
     for folder_id in FOLDER_IDS:
@@ -265,8 +306,8 @@ def main():
             file_name = file['name']
             mime_type = file.get('mimeType', '')
             
-            # Check if this file should be downloaded based on build target
-            if should_download_file(file_name, patterns):
+            # Check if this file should be downloaded based on any of the patterns
+            if should_download_file(file_name, all_patterns):
                 print(f"Found file matching build target: {file_name}")
                 file_path = download_file(file_id, file_name, mime_type)
                 if file_path:
@@ -277,7 +318,7 @@ def main():
                     else:
                         print(f"File {file_name} is unchanged. Skipping release and upload.")
             else:
-                print(f"Skipping file {file_name} (does not match build target {BUILD_TARGET})")
+                print(f"Skipping file {file_name} (does not match any build target)")
 
     # Step 2: If new/changed files were downloaded
     if downloaded_files:
