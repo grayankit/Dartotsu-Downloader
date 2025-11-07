@@ -125,9 +125,9 @@ def create_github_release(repo, token, tag, files, release_notes=""):
             release_notes = unquote(release_notes)
         except:
             pass
-        body = f"## Alpha release for {BUILD_TARGET}\n\n{release_notes}"
+        body = f"## Alpha release for {tag}\n\n{release_notes}"
     else:
-        body = f"## Alpha release for {BUILD_TARGET}"
+        body = f"## Alpha release for {tag}"
     
     if check_response.status_code == 200:
         print(f"Release with tag '{tag}' already exists. Updating existing release.")
