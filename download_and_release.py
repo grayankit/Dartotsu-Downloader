@@ -163,20 +163,85 @@ def create_github_release(repo, token, tag, files, release_notes=""):
         release = release_response.json()
 
     upload_url = release["upload_url"].split("{")[0]
+    uploaded = {}
 
     # Upload files to the release
     for file_path in files:
         if file_path:  # Skip if file_path is None
             file_name = os.path.basename(file_path)
             with open(file_path, "rb") as f:
-                headers.update({"Content-Type": "application/octet-stream"})
+                upload_headers = {
+                    "Authorization": headers["Authorization"],
+                    "Content-Type": "application/octet-stream",
+                }
                 upload_response = requests.post(
-                    f"{upload_url}?name={file_name}", headers=headers, data=f
+                    f"{upload_url}?name={file_name}", headers=upload_headers, data=f
                 )
                 if upload_response.status_code not in (200, 201):
                     raise Exception(f"Failed to upload file {file_name}: {upload_response.content}")
+            asset = upload_response.json()
+            uploaded[file_name] = asset.get("browser_download_url") or (
+                f"https://github.com/{repo}/releases/download/{tag}/{file_name}"
+            )
             print(f"Uploaded {file_name} to GitHub release.")
     print(f"Release {tag} created/updated successfully.")
+    return uploaded
+
+LINUX_ZIP_NAME = "Dartotsu_linux.zip"
+DARTOTSU_REPO = "aayush2622/Dartotsu"
+
+
+def nix_sri_hash(zip_path):
+    url = "file://" + os.path.abspath(zip_path)
+    result = subprocess.run(
+        ["nix-prefetch-url", "--unpack", "--type", "sha256", url],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    base32 = result.stdout.strip().splitlines()[-1]
+    sri = subprocess.run(
+        ["nix", "hash", "to-sri", "--type", "sha256", base32],
+        capture_output=True,
+        text=True,
+    )
+    if sri.returncode != 0:
+        sri = subprocess.run(
+            ["nix", "hash", "convert", "--hash-algo", "sha256", "--to", "sri", base32],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    return sri.stdout.strip()
+
+
+def dispatch_dartotsu_alpha(version, url, sri_hash):
+    token = os.getenv("DARTOTSU_DISPATCH_TOKEN", "")
+    if not token:
+        raise Exception(
+            "DARTOTSU_DISPATCH_TOKEN is not set; cannot update the Nix alpha channel"
+        )
+    response = requests.post(
+        f"https://api.github.com/repos/{DARTOTSU_REPO}/actions/workflows/update-nix-channels.yml/dispatches",
+        headers={
+            "Authorization": f"token {token}",
+            "Accept": "application/vnd.github+json",
+        },
+        json={
+            "ref": "main",
+            "inputs": {
+                "alpha_version": version,
+                "alpha_url": url,
+                "alpha_hash": sri_hash,
+            },
+        },
+    )
+    if response.status_code != 204:
+        raise Exception(
+            f"Failed to dispatch Dartotsu nix update: {response.status_code} {response.content}"
+        )
+    print(f"Dispatched Nix alpha update for {version}")
+
 
 def get_external_commit_hash(repo):
     url = f"https://api.github.com/repos/{repo}/commits"
@@ -322,23 +387,39 @@ def main():
 
     # Step 2: If new/changed files were downloaded
     if downloaded_files:
-        # Clean up old files not in the current release
+        # Clean up old files not in the current release. The binaries are
+        # release assets only; they are not committed.
         cleanup_old_files(downloaded_files)
-        
-        configure_git_identity()
-        commit_and_push(downloaded_files)
 
         # Use the passed commit SHA if available, otherwise fall back to fetching it
         if COMMIT_SHA:
             tag_name = COMMIT_SHA[:7]
             print(f"Using passed commit SHA: {tag_name}")
         else:
-            EXTERNAL_REPO = "aayush2622/Dartotsu"
-            tag_name = get_external_commit_hash(EXTERNAL_REPO)
+            tag_name = get_external_commit_hash(DARTOTSU_REPO)
             print(f"Using tag based on external commit hash: {tag_name}")
 
-        # Create or update release with release notes
-        create_github_release(GITHUB_REPO, GITHUB_TOKEN, tag_name, downloaded_files, RELEASE_NOTES)
+        uploaded = create_github_release(
+            GITHUB_REPO, GITHUB_TOKEN, tag_name, downloaded_files, RELEASE_NOTES
+        )
+
+        linux_zip = next(
+            (
+                path
+                for path in downloaded_files
+                if path and os.path.basename(path) == LINUX_ZIP_NAME
+            ),
+            None,
+        )
+        if linux_zip:
+            url = uploaded.get(LINUX_ZIP_NAME) or (
+                f"https://github.com/{GITHUB_REPO}/releases/download/{tag_name}/{LINUX_ZIP_NAME}"
+            )
+            sri_hash = nix_sri_hash(linux_zip)
+            print(f"Alpha zip hash: {sri_hash}")
+            dispatch_dartotsu_alpha(tag_name, url, sri_hash)
+        else:
+            print("No Dartotsu_linux.zip in this release; leaving the Nix alpha channel unchanged.")
 
         # Upload to Telegram
         for file_path in downloaded_files:
