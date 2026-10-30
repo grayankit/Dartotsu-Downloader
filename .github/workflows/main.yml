@@ -31,7 +31,9 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -42,6 +44,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2 requests
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
 
       - name: Determine build target
         id: determine_target
@@ -93,5 +98,6 @@ jobs:
           COMMIT_SHA: ${{ github.event.inputs.commit_sha }}
           RELEASE_NOTES: ${{ github.event.inputs.commit_logs }}
           GITHUB_BRANCH: ${{ github.ref_name }}  # Add this to pass the current branch name
+          DARTOTSU_DISPATCH_TOKEN: ${{ secrets.DARTOTSU_DISPATCH_TOKEN }}
         run: |
           python download_and_release.py "$SERVICE_ACCOUNT_JSON" "$BUILD_TARGET" "$COMMIT_SHA" "$RELEASE_NOTES"
