@@ -1,0 +1,73 @@
+name: Cleanup Old Releases
+
+on:
+  schedule:
+    # Runs at 23:59 every Friday (end of Friday)
+    - cron: '59 23 * * 5'
+  workflow_dispatch:
+    inputs:
+      keep_count:
+        description: 'Number of recent releases to keep'
+        required: false
+        type: number
+        default: 50
+      dry_run:
+        description: 'Dry run (preview releases to delete without deleting)'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cleanup old releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          KEEP_COUNT: ${{ inputs.keep_count || 50 }}
+          DRY_RUN: ${{ inputs.dry_run || false }}
+        run: |
+          set -euo pipefail
+
+          echo "Configured to keep the latest $KEEP_COUNT releases."
+          echo "Dry run mode: $DRY_RUN"
+
+          # Fetch all releases ordered from newest to oldest
+          # Using --limit 1000 to cover all releases
+          RELEASES_JSON=$(gh release list --limit 1000 --json tagName,isLatest,publishedAt)
+
+          TOTAL_RELEASES=$(echo "$RELEASES_JSON" | jq 'length')
+          echo "Total releases found: $TOTAL_RELEASES"
+
+          if [ "$TOTAL_RELEASES" -le "$KEEP_COUNT" ]; then
+            echo "Current release count ($TOTAL_RELEASES) is within the limit ($KEEP_COUNT). Nothing to delete."
+            exit 0
+          fi
+
+          # Extract tags beyond the KEEP_COUNT, but protect any release marked isLatest
+          # jq filters out the first KEEP_COUNT entries, and excludes isLatest == true
+          TAGS_TO_DELETE=$(echo "$RELEASES_JSON" | jq -r --argjson keep "$KEEP_COUNT" '
+            .[$keep:] | .[] | select(.isLatest != true) | .tagName
+          ')
+
+          COUNT_TO_DELETE=$(echo "$TAGS_TO_DELETE" | grep -c . || true)
+          echo "Found $COUNT_TO_DELETE releases to delete."
+
+          for tag in $TAGS_TO_DELETE; do
+            if [ -z "$tag" ]; then
+              continue
+            fi
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "[DRY RUN] Would delete release and tag: $tag"
+            else
+              echo "Deleting release and tag: $tag"
+              gh release delete "$tag" --yes --cleanup-tag || {
+                echo "::warning::Failed to delete release/tag $tag; skipping"
+              }
+            fi
+          done
+
+          echo "Cleanup completed successfully."
