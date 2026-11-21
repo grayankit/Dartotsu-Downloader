@@ -27,17 +27,18 @@ jobs:
       - name: Cleanup old releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
           KEEP_COUNT: ${{ inputs.keep_count || 50 }}
           DRY_RUN: ${{ inputs.dry_run || false }}
         run: |
           set -euo pipefail
 
+          echo "Repository: $GH_REPO"
           echo "Configured to keep the latest $KEEP_COUNT releases."
           echo "Dry run mode: $DRY_RUN"
 
           # Fetch all releases ordered from newest to oldest
-          # Using --limit 1000 to cover all releases
-          RELEASES_JSON=$(gh release list --limit 1000 --json tagName,isLatest,publishedAt)
+          RELEASES_JSON=$(gh release list --repo "$GH_REPO" --limit 1000 --json tagName,isLatest,publishedAt)
 
           TOTAL_RELEASES=$(echo "$RELEASES_JSON" | jq 'length')
           echo "Total releases found: $TOTAL_RELEASES"
@@ -48,7 +49,6 @@ jobs:
           fi
 
           # Extract tags beyond the KEEP_COUNT, but protect any release marked isLatest
-          # jq filters out the first KEEP_COUNT entries, and excludes isLatest == true
           TAGS_TO_DELETE=$(echo "$RELEASES_JSON" | jq -r --argjson keep "$KEEP_COUNT" '
             .[$keep:] | .[] | select(.isLatest != true) | .tagName
           ')
@@ -64,7 +64,7 @@ jobs:
               echo "[DRY RUN] Would delete release and tag: $tag"
             else
               echo "Deleting release and tag: $tag"
-              gh release delete "$tag" --yes --cleanup-tag || {
+              gh release delete "$tag" --repo "$GH_REPO" --yes --cleanup-tag || {
                 echo "::warning::Failed to delete release/tag $tag; skipping"
               }
             fi
